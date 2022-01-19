@@ -1,0 +1,22 @@
+service: helegraaf
+
+provider:
+  name: aws
+  runtime: python3.9
+  lambdaHashingVersion: 20201221
+  environment:
+    PATH_TOKEN: ${file(./serverless.env.yml):PATH_TOKEN, ''}
+
+functions:
+  webhook:
+    handler: handler.home
+    events:
+      - httpApi: GET /${file(./serverless.env.yml):PATH_TOKEN, ''}
+
+  fix_webhook:
+    handler: handler.fix
+    events:
+      - httpApi: POST /${file(./serverless.env.yml):PATH_TOKEN, ''}/fix
+
+plugins:
+  - serverless-python-requirements
