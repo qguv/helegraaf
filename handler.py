@@ -9,24 +9,7 @@ import cgi
 import io
 from urllib.parse import urlparse, unquote
 
-def get_content_telegraaf(dom) -> str:
-    src = dom.select('html.no-js head script[data-react-helmet="true"]')
-    ld = json.loads(src[0].text)
-    return (ld['headline'], ld['articleBody'])
-
-sites = {
-    "www.telegraaf.nl": get_content_telegraaf,
-}
-
-def get_content(url: str) -> str:
-    page = requests.get(url).text
-    dom = BeautifulSoup(page, features="html.parser")
-
-    hostname = urlparse(url).hostname
-    fn = sites[hostname]
-    return fn(dom)
-
-# Logging is cool!
+# set up cloudwatch logs~
 logger = logging.getLogger()
 if logger.handlers:
     for handler in logger.handlers:
@@ -53,19 +36,87 @@ home_template = '''
 </html>
 '''
 
-def get_form_data(event) -> dict:
-    fp = io.BytesIO(event['body'].encode('utf-8'))
-    pdict = cgi.parse_header(event['headers']['Content-Type'])[1]
-    if 'boundary' in pdict:
-        pdict['boundary'] = pdict['boundary'].encode('utf-8')
-    pdict['CONTENT-LENGTH'] = len(event['body'])
-    return cgi.parse_multipart(fp, pdict)
+article_template = '''
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>helegaaf: {title}</title>
+
+    <style>
+        html {{
+            background-color: #222;
+            padding: 5px;
+        }}
+
+        body {{
+            padding: 1em 2em;
+            margin: auto;
+            color: white;
+            max-width: 800px;
+            font-family: sans-serif;
+        }}
+
+        h1 {{
+            margin-bottom: 40px;
+            text-align: center;
+        }}
+
+        h2 {{
+            margin-top: 40px;
+            text-align: left;
+        }}
+
+        h1, h2 {{
+            font-family: serif;
+        }}
+
+        p:first-of-type::first-letter {{
+            font-size: 300%;
+            font-weight: bold;
+            font-family: serif;
+        }}
+
+        p {{
+            text-align: justify;
+            line-height: 1.5em;
+        }}
+    </style>
+
+</head>
+<body>
+    <h1>{title}</h1>
+    {paragraphs}
+</body>
+</html>
+'''
+
+
+def get_content_telegraaf(dom) -> str:
+    src = dom.select('html.no-js head script[data-react-helmet="true"]')
+    ld = json.loads(src[0].text)
+    return (ld['headline'], ld['articleBody'])
+
+sites = {
+    "www.telegraaf.nl": get_content_telegraaf,
+}
+
+
+def get_content(url: str) -> str:
+    page = requests.get(url).text
+    dom = BeautifulSoup(page, features="html.parser")
+
+    hostname = urlparse(url).hostname
+    fn = sites[hostname]
+    return fn(dom)
+
 
 def home(_event, _context):
     try:
         return ok_html(home_template)
     except Exception:
         return error(traceback.format_exc())
+
 
 def fix(event, context):
     try:
@@ -77,9 +128,6 @@ def fix(event, context):
     except Exception:
         return error(traceback.format_exc())
 
-    #if event['requestContext']['http']['method'] != 'POST' or \
-            #not event['body']:
-        #return ERROR_RESPONSE
 
 def ok_json(src: str) -> dict:
     return {
@@ -88,6 +136,7 @@ def ok_json(src: str) -> dict:
         'body': json.dumps(src),
     }
 
+
 def ok_html(src: str) -> dict:
     return {
         'statusCode': 200,
@@ -95,13 +144,30 @@ def ok_html(src: str) -> dict:
         'body': src,
     }
 
+
+def wrap_tag(s) -> str or None:
+    has_punctuation = any((c in '.?!') for c in s)
+    tag = 'p' if has_punctuation else 'h2'
+    return f"<{tag}>{s}</{tag}>"
+
+
+def fmt_article(content):
+    for line in content.split('\n'):
+        line = line.strip()
+        if line:
+            tag = wrap_tag(line)
+            if tag:
+                yield tag
+
+
 def ok_article(title, content) -> dict:
-    paragraphs = '\n'.join(f"<p>{line}</p>" for line in content.split('\n'))
+    paragraphs = '\n'.join(fmt_article(content))
     return {
         'statusCode': 200,
         'headers': {'Content-Type': 'text/html'},
-        'body': f'<!doctype html><html><head><meta charset="utf-8"></head><title>helegaaf: {title}</title><body><h1>{title}</h1><p>{paragraphs}</p></body></html>',
+        'body': article_template.format(title=title, paragraphs=paragraphs),
     }
+
 
 def error(error: str) -> dict:
     return {
